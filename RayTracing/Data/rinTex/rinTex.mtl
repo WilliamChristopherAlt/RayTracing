@@ -1,0 +1,32 @@
+# Blender 4.1.1 MTL File: 'None'
+# www.blender.org
+
+newmtl rin_S003_Alpha.002
+Ns 159.999985
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd rin_S003_Alpha_baseColor.png
+
+newmtl rin_S003_Diffuse.002
+Ns 159.999985
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd rin_S003_Diffuse_baseColor.png
+
+newmtl test_lambert302.002
+Ns 159.999985
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd test_lambert302_baseColor.png

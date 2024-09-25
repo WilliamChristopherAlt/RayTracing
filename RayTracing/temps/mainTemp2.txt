@@ -1,0 +1,402 @@
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <OpenGL/shaderClass.h>
+#include <OpenGL/VAO.h>
+#include <OpenGL/VBO.h>
+#include <OpenGL/SSBO.h>
+#include <OpenGL/UBO.h>
+#include <OpenGL/FBO.h>
+
+#include <RayTracing/Assets/headers/BVH.h>
+
+#include <RayTracing/Assets/headers/camera.h>
+#include <RayTracing/Assets/headers/mesh.h>
+
+// #define STB_IMAGE_IMPLEMENTATION
+// #include "stb/stb_image.h"
+// #define STB_IMAGE_WRITE_IMPLEMENTATION
+// #include "stb/stb_image_write.h"
+
+#include <iomanip>
+#include <sstream>
+
+const int SCR_WIDTH = 500;
+const int SCR_HEIGHT = 500;
+//const int SCR_WIDTH = 1000;
+//const int SCR_HEIGHT = 800;
+
+const int MAX_SPHERES = 5;
+
+const int MAX_BOUNCE_COUNT = 5;
+float numRaysPerPixel = 10;
+const float RAYS_PER_PIXEL_SENSITIVITY = 10.0f;
+
+const bool BASIC_SHADING = true;
+const bool BASIC_SHADING_SHADOW = false;
+const glm::vec3 BASIC_SHADING_LIGHT_POSITION = glm::vec3(10.0f, 10.0f, 1.0f);
+const bool ENVIRONMENTAL_LIGHT = true;
+
+const int SCREENSHOT_WIDTH = 1920;
+const int SCREENSHOT_HEIGHT = 1080;
+const int SCREENSHOT_ENVIRONMENTAL_LIGHT = false;
+const int SCREENSHOT_MAX_BOUNCE_COUNT = 20;
+const int SCREENSHOT_RAYS_PER_PIXEL = 100;
+const int SCREENSHOT_FRAMES = 10;
+
+const int FPS = 120;
+const float SPF = 1.0f / FPS;
+
+// Starting values for camera
+float speed = 10.0f;
+float hfov = PI / 6;
+float pitch = 0.0f;
+float yaw = PI / 2.0f;
+float focusDistance = 20.0f;
+float defocusAngle = 0.0f;
+float zoom = 1.0f;
+glm::vec3 cameraPos(0.0f, 5.0f, 10.0f);
+
+float vertices[] = {
+	-1.0f, -1.0f, 0.0f,
+	 1.0f, -1.0f, 0.0f,
+	 1.0f,  1.0f, 0.0f,
+	-1.0f, -1.0f, 0.0f,
+	-1.0f,  1.0f, 0.0f,
+	 1.0f,  1.0f, 0.0f
+};
+
+void screenshot(FBO& FBO, UBO& UBO, GlobalUniforms& uniforms)
+{
+	uniforms.width = SCREENSHOT_WIDTH;
+	uniforms.height = SCREENSHOT_HEIGHT;
+	uniforms.basicShading = false;
+	uniforms.environmentalLight = false;
+	uniforms.maxBounceCount = SCREENSHOT_MAX_BOUNCE_COUNT;
+	uniforms.numRaysPerPixel = SCREENSHOT_RAYS_PER_PIXEL;
+	uniforms.frameIndex = 0;
+	UBO.Update(&uniforms, sizeof(GlobalUniforms));
+
+	// Allocate memory to store pixel data
+	GLubyte* pixels = new GLubyte[3 * SCREENSHOT_WIDTH * SCREENSHOT_HEIGHT]{ 0 };
+	float* pixelsCumulative = new float[3 * SCREENSHOT_WIDTH * SCREENSHOT_HEIGHT]{ 0 };
+
+	// Draw
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	FBO.Bind();
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+
+	// // Read to pixels
+	// glReadPixels(0, 0, SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+
+	// // Flip the image vertically(OpenGL's origin is at the bottom-left, but most images start at the top-left)
+	// for (int y = 0; y < SCREENSHOT_HEIGHT / 2; y++)
+	// 	for (int x = 0; x < SCREENSHOT_WIDTH * 3; x++)
+	// 		std::swap(pixels[y * SCREENSHOT_WIDTH * 3 + x], pixels[(SCREENSHOT_HEIGHT - 1 - y) * SCREENSHOT_WIDTH * 3 + x]);
+	
+	// stbi_write_png(R"(C:\Users\PC\Desktop\Programming\C++\OpenGL Test\projects\RayTracing\Images)", SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, 3, pixels, SCREENSHOT_WIDTH * 3);
+}
+
+void mouseCallback(GLFWwindow* window, double xpos, double ypos) {
+	Camera* cameraPtr = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+	cameraPtr->mouseCallback(xpos, ypos);
+}
+
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset)
+{
+	Camera* cameraPtr = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+	cameraPtr->updateViewportVectors(yoffset);
+}
+
+void keyBoardInput(GLFWwindow* window, Camera& camera, float dt, bool& isScreenshot)
+{
+	uint8_t inputBits = 0;
+
+	if (glfwGetKey(window, GLFW_KEY_ESCAPE))
+	{
+		glfwSetWindowShouldClose(window, true);
+		camera.displayInfo();
+		return;
+	}
+	if (glfwGetKey(window, GLFW_KEY_W) && !glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+		inputBits |= Camera::FORWARD;
+	if (glfwGetKey(window, GLFW_KEY_S) && !glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+		inputBits |= Camera::BACKWARD;
+	if (glfwGetKey(window, GLFW_KEY_A))
+		inputBits |= Camera::LEFT;
+	if (glfwGetKey(window, GLFW_KEY_D))
+		inputBits |= Camera::RIGHT;
+	if (glfwGetKey(window, GLFW_KEY_W) && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+		inputBits |= Camera::UP;
+	if (glfwGetKey(window, GLFW_KEY_S) && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+		inputBits |= Camera::DOWN;
+	if (glfwGetKey(window, GLFW_KEY_Z) && !glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+		inputBits |= Camera::DEFOCUS_UP;
+	if (glfwGetKey(window, GLFW_KEY_Z) && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+		inputBits |= Camera::DEFOCUS_DOWN;
+	if (glfwGetKey(window, GLFW_KEY_X) && !glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+	{
+		numRaysPerPixel += RAYS_PER_PIXEL_SENSITIVITY * dt;
+		numRaysPerPixel = clamp(numRaysPerPixel, 1.1f, 200.0f);
+	}
+	if (glfwGetKey(window, GLFW_KEY_X) && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
+	{
+		numRaysPerPixel -= RAYS_PER_PIXEL_SENSITIVITY * dt;
+		numRaysPerPixel = clamp(numRaysPerPixel, 1.1f, 200.0f);
+	}
+	
+	camera.keyboardInput(inputBits, dt);
+	isScreenshot = (glfwGetKey(window, GLFW_KEY_S) && glfwGetKey(window, GLFW_KEY_LEFT_CONTROL));
+}
+
+void addCornellBox(std::vector<RTXTriangle>& rtxTriangles, std::vector<BVHTriangle>& bvhTriangles, float padPercentage)
+{
+	BoundingBox sceneBounds;
+	for (const BVHTriangle& tri : bvhTriangles)
+		sceneBounds.growToInclude(tri);
+
+	glm::vec3 sceneSize = sceneBounds.size();
+	float minX = sceneBounds.min.x - sceneSize.x * padPercentage;
+	float maxX = sceneBounds.max.x + sceneSize.x * padPercentage;
+	float minY = sceneBounds.min.y - sceneSize.y * padPercentage * 0.1f;
+	float maxY = sceneBounds.max.y + sceneSize.y * padPercentage;
+	float minZ = sceneBounds.min.z - sceneSize.z * padPercentage;
+	float maxZ = sceneBounds.max.z + sceneSize.z * padPercentage;
+
+	std::vector<glm::vec3> corners = 
+	{
+		glm::vec3(minX, minY, maxZ),
+		glm::vec3(maxX, minY, maxZ),
+		glm::vec3(minX, maxY, maxZ),
+		glm::vec3(maxX, maxY, maxZ),
+		glm::vec3(minX, minY, minZ),
+		glm::vec3(maxX, minY, minZ),
+		glm::vec3(minX, maxY, minZ),
+		glm::vec3(maxX, maxY, minZ),
+	};
+
+	glm::vec3 boxSize = glm::vec3(maxX, maxY, maxZ) - glm::vec3(minX, minY, minZ);
+
+	float lightMinX = minX + boxSize.x * 0.3f;
+	float lightMaxX = maxX - boxSize.x * 0.3f;
+	float lightMinZ = minZ + boxSize.z * 0.3f;
+	float lightMaxZ = maxZ - boxSize.z * 0.3f;
+	float lightY = maxY - 1e-3f;
+
+	std::vector<glm::vec3> lightCorners =
+	{
+		glm::vec3(lightMinX, lightY, lightMaxZ),
+		glm::vec3(lightMaxX, lightY, lightMaxZ),
+		glm::vec3(lightMinX, lightY, lightMinZ),
+		glm::vec3(lightMaxX, lightY, lightMinZ),
+	};
+
+	int triCornersIndicies[12][3] =
+	{
+		{0, 3, 1},
+		{0, 2, 3},
+		{0, 5, 4},
+		{0, 1, 5},
+		{0, 6, 2},
+		{0, 4, 6},
+		{7, 1, 3},
+		{7, 5, 1},
+		{7, 2, 6},
+		{7, 3, 2},
+		{7, 4, 5},
+		{7, 6, 4}
+	};
+
+	int lightCornersIndicies[2][3] =
+	{
+		{0, 3, 1},
+		{0, 2, 3}
+	};
+
+	std::vector<RTXTriangle> cornellCornersRTX;
+	for (int i = 0 ; i < 12; i++)
+		cornellCornersRTX.push_back(RTXTriangle(Material(), glm::vec4(corners[triCornersIndicies[i][0]], 0.0f),  glm::vec4(corners[triCornersIndicies[i][1]], 0.0f),
+							 glm::vec4(corners[triCornersIndicies[i][2]], 0.0f), glm::vec2(), glm::vec2(), glm::vec2()));
+	std::vector<BVHTriangle> cornellCornersBVH;
+	for (int i = 0 ; i < 12; i++)
+		cornellCornersBVH.push_back(BVHTriangle(corners[triCornersIndicies[i][0]], corners[triCornersIndicies[i][1]], corners[triCornersIndicies[i][2]]));
+
+	std::vector<RTXTriangle> cornellLightRTX;
+	Material mat;
+	mat.makeLight(glm::vec3(1.0f), 10.0f);
+	for (int i = 0 ; i < 2; i++)
+		cornellLightRTX.push_back(RTXTriangle(mat, glm::vec4(lightCorners[lightCornersIndicies[i][0]], 0.0f),  glm::vec4(lightCorners[lightCornersIndicies[i][1]], 0.0f),
+							 glm::vec4(lightCorners[lightCornersIndicies[i][2]], 0.0f), glm::vec2(), glm::vec2(), glm::vec2()));
+	std::vector<BVHTriangle> cornellLightBVH;
+	for (int i = 0 ; i < 2; i++)
+		cornellLightBVH.push_back(BVHTriangle(lightCorners[triCornersIndicies[i][0]], lightCorners[triCornersIndicies[i][1]], lightCorners[triCornersIndicies[i][2]]));
+
+	rtxTriangles.insert(rtxTriangles.end(), cornellCornersRTX.begin(), cornellCornersRTX.end());
+	bvhTriangles.insert(bvhTriangles.end(), cornellCornersBVH.begin(), cornellCornersBVH.end());
+	rtxTriangles.insert(rtxTriangles.end(), cornellLightRTX.begin(), cornellLightRTX.end());
+	bvhTriangles.insert(bvhTriangles.end(), cornellLightBVH.begin(), cornellLightBVH.end());
+}
+
+int main()
+{
+	// GLFW initialization
+	glfwInit();
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+	GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Ray Tracing", NULL, NULL);
+	if (window == NULL)
+	{
+		std::cout << "Failed to create a GLFW window" << std::endl;
+		glfwTerminate();
+		return -1;
+	}
+
+	glfwMakeContextCurrent(window);
+
+	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+	{
+		std::cout << "Failed to initialize GLAD" << std::endl;
+		return -1;
+	}
+
+	glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+	// Loading mesh data
+	std::vector<RTXTriangle> rtxTriangles;
+	std::vector<BVHTriangle> bvhTriangles;
+	std::vector<Material> materials;
+	std::vector<Texture2D> textures;
+	getTrianglesData_("Data\\rinTex", 1, rtxTriangles, bvhTriangles, materials, textures);
+
+	addCornellBox(rtxTriangles, bvhTriangles, 0.1f);
+
+	BVH BVH(bvhTriangles, rtxTriangles);
+
+	// for (RTXTriangle& tri : rtxTriangles)
+	// 	tri.material.makeSpecular(glm::vec3(0.0f, 1.0f, 1.0f), glm::vec3(1.0f), 1.0f, 1.0f);
+
+	// Shader, VAO, VBO, UBO
+	Shader shader("Assets\\Shaders\\vert.glsl", "Assets\\Shaders\\frag.glsl", 1, false);
+
+	VAO VAO;
+	VAO.Bind();
+	VBOSimple VBO(vertices, sizeof(vertices));
+	VAO.LinkAttrib(VBO, 0, 3, GL_FLOAT, 3 * sizeof(float), (void*)0);
+	VBO.Unbind();
+	VAO.Unbind();
+
+	// SSBOs for triangles and nodes
+	SSBO trianglesSSBO(rtxTriangles.data(), sizeof(RTXTriangle) * rtxTriangles.size(), 0);
+	SSBO nodeSSBO(BVH.allNodes.data(), sizeof(Node) * BVH.allNodes.size(), 1);
+
+	// Set shader's constants
+	shader.Activate();
+	trianglesSSBO.BindToBlock(shader, "TrianglesBlock");
+	nodeSSBO.BindToBlock(shader, "NodesBlock");
+
+	// Textures
+	for (int i = 0; i < textures.size(); i++)
+	{
+		glActiveTexture(GL_TEXTURE0 + i);
+		textures[i].Bind();
+	}
+	int textureUnits[MAX_TEXTURES] = {0, 1, 2, 3, 4};
+	shader.setIntArray("textures", textureUnits, sizeof(textureUnits));
+
+	// Transfer uniforms with UBO
+	GlobalUniforms uniforms;
+	UBO UBO(2, sizeof(GlobalUniforms));
+
+	// FBO
+	// Texture to write image into from FBO
+	Texture2D texture(SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT, nullptr, 0, GL_UNSIGNED_BYTE, GL_NEAREST, GL_REPEAT);
+	FBO FBO(texture.ID);
+
+	// Create camera
+	Camera camera = Camera(SCR_WIDTH, SCR_HEIGHT, speed, cameraPos, hfov, pitch, yaw, focusDistance, defocusAngle, zoom);
+
+	// Is later used by glfwGetWindowUserPointer in glfwSetCursorPosCallback and glfwSetScrollCallback to get the camera, avoiding global variables
+	glfwSetWindowUserPointer(window, &camera);
+	glfwSetCursorPosCallback(window, mouseCallback);
+	glfwSetScrollCallback(window, scrollCallback);
+
+	// Main while loop
+	float lastFrame = glfwGetTime();
+	int frameIndex = -1;
+	while (!glfwWindowShouldClose(window))
+	{
+		frameIndex++;
+
+		// Get deltaTime
+		float currentFrame = glfwGetTime();
+		float deltaTime = currentFrame - lastFrame;
+		if (deltaTime < SPF)
+			continue;
+		lastFrame = currentFrame;
+
+		// Set window title with FPS
+		std::ostringstream fps;
+		fps << std::fixed << std::setprecision(2) << 1.0f / deltaTime;
+		std::string title = "Demo - FPS:" + fps.str();
+		glfwSetWindowTitle(window, title.c_str());
+
+		// Uniforms
+		uniforms.numTextures = textures.size();
+		uniforms.width = SCR_WIDTH;
+		uniforms.height = SCR_HEIGHT;
+		uniforms.numSpheres = 0;
+		uniforms.numTriangles = rtxTriangles.size();
+		uniforms.basicShading = BASIC_SHADING;
+		uniforms.basicShadingShadow = BASIC_SHADING_SHADOW;
+		uniforms.basicShadingLightPosition = glm::vec4(BASIC_SHADING_LIGHT_POSITION, 0.0f);
+		uniforms.environmentalLight = ENVIRONMENTAL_LIGHT;
+		uniforms.maxBounceCount = MAX_BOUNCE_COUNT;
+		uniforms.numRaysPerPixel = numRaysPerPixel;
+		uniforms.frameIndex = frameIndex;
+		// Update uniforms based on changes of position, rotation, and zooming
+		camera.updateShader(uniforms);
+
+		// glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+		// glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GlobalUniforms), &uniforms);
+
+		UBO.Update(&uniforms, sizeof(GlobalUniforms));
+
+		// Draw
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		FBO.Unbind();
+		glDrawArrays(GL_TRIANGLES, 0, 6);
+
+		// Keyboard
+		bool isScreenshot;
+		keyBoardInput(window, camera, deltaTime, isScreenshot);
+
+		if (isScreenshot)
+			screenshot(FBO, UBO, uniforms);
+
+		// Swap front and back buffers, process "pending" events
+		glfwSwapBuffers(window);
+		glfwPollEvents();
+	}
+
+	VAO.Delete();
+	VBO.Delete();
+	UBO.Delete();
+	FBO.Delete();
+	trianglesSSBO.Delete();
+	nodeSSBO.Delete();
+	shader.Delete();
+
+	glfwDestroyWindow(window);
+	glfwTerminate();
+
+	return 0;
+}
