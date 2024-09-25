@@ -15,13 +15,7 @@
                 "-L${workspaceFolder}/lib",
                 "${workspaceFolder}/src/glad.c",
 
-                // Project-specific cpp files goes here
-                // "${workspaceFolder}\\projects\\RayTracing\\src\\test.cpp",
                 "${workspaceFolder}\\projects\\RayTracing\\src\\rayTracerMoving.cpp",
-                // "${workspaceFolder}\\projects\\RayTracing\\src\\rayTracerBVHVisualize.cpp",
-                // "${workspaceFolder}\\projects\\Mandelbrot\\mandelbrot.cpp",
-
-                // "${workspaceFolder}\\projects\\ComputeShader\\main.cpp",
 
                 "${workspaceFolder}\\include\\OpenGL\\VAO.cpp",
                 "${workspaceFolder}\\include\\OpenGL\\VBO.cpp",
