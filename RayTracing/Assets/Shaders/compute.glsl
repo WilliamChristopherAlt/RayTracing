@@ -473,6 +473,11 @@ vec3 trace(Ray ray, inout uint rngState)
 					return vec3(0.0f);
 			}
 			rayColor *= attenuation;
+			// A simple optimization
+			float p = max(rayColor.r, max(rayColor.g, rayColor.b));
+			if (random(rngState) > p)
+			    break;
+			rayColor *= 1.0f / p;
 		}
 		else
 		{
